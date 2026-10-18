@@ -1,0 +1,127 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  MANAGER
+  MEMBER
+}
+
+enum WorkStatus {
+  OPEN
+  IN_PROGRESS
+  BLOCKED
+  IN_REVIEW
+  DONE
+  CLOSED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model User {
+  id           String       @id @default(cuid())
+  email        String       @unique
+  name         String
+  passwordHash String?
+  // Global administrator (platform-level). Distinct from team ADMIN (see Membership.role).
+  // Only ever set via seed/bootstrap or by an existing global admin; never via public registration.
+  isGlobalAdmin Boolean   @default(false)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  memberships  Membership[]
+  assignedItems WorkItem[]  @relation("Assignee")
+  createdItems  WorkItem[]  @relation("Creator")
+  comments      Comment[]
+  activityEvents ActivityEvent[] @relation("Actor")
+
+  @@index([email])
+}
+
+model Team {
+  id          String       @id @default(cuid())
+  name        String       @unique
+  description String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  memberships Membership[]
+  workItems   WorkItem[]
+}
+
+model Membership {
+  userId    String
+  teamId    String
+  role      Role     @default(MEMBER)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@id([userId, teamId])
+  @@index([teamId])
+  @@index([userId])
+}
+
+model WorkItem {
+  id          String     @id @default(cuid())
+  title       String
+  description String     @db.Text
+  status      WorkStatus @default(OPEN)
+  priority    Priority   @default(MEDIUM)
+  // Optimistic concurrency token. Client must send expected version; mismatch -> 409.
+  version     Int        @default(1)
+  teamId      String
+  team        Team       @relation(fields: [teamId], references: [id], onDelete: Restrict)
+  assigneeId  String?
+  assignee    User?      @relation("Assignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  createdById String?
+  createdBy   User?      @relation("Creator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  comments       Comment[]
+  activityEvents ActivityEvent[]
+
+  @@index([teamId, status])
+  @@index([teamId, priority])
+  @@index([assigneeId])
+  @@index([updatedAt])
+  @@index([teamId, updatedAt])
+}
+
+model Comment {
+  id         String   @id @default(cuid())
+  body       String   @db.Text
+  workItemId String
+  workItem   WorkItem @relation(fields: [workItemId], references: [id], onDelete: Cascade)
+  authorId   String
+  author     User     @relation(fields: [authorId], references: [id], onDelete: Restrict)
+  createdAt  DateTime @default(now())
+
+  @@index([workItemId, createdAt])
+}
+
+model ActivityEvent {
+  id         String   @id @default(cuid())
+  workItemId String
+  workItem   WorkItem @relation(fields: [workItemId], references: [id], onDelete: Cascade)
+  actorId    String?
+  actor      User?    @relation("Actor", fields: [actorId], references: [id], onDelete: SetNull)
+  action     String
+  detail     Json?
+  // Snapshot of WorkItem.version after the action. Enables stale-read detection in UI.
+  version    Int
+  createdAt  DateTime @default(now())
+
+  @@index([workItemId, createdAt])
+}
