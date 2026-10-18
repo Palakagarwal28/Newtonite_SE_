@@ -1,259 +1,315 @@
-# Newtonite-SE — Internal Operations Management
+# Newtonite Ops — Internal Operations Management
 
-Foundation milestone (M0): monorepo scaffold proving the vertical slice works end-to-end.
+[![Node.js Version](https://img.shields.io/badge/Node.js-%3E%3D20.0.0-brightgreen.svg)](https://nodejs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.6-blue.svg)](https://www.typescriptlang.org/)
+[![React](https://img.shields.io/badge/React-18.3-61dafb.svg)](https://react.dev/)
+[![Express](https://img.shields.io/badge/Express-4.21-lightgrey.svg)](https://expressjs.com/)
+[![Prisma](https://img.shields.io/badge/Prisma-5.22-2D3748.svg)](https://www.prisma.io/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791.svg)](https://www.postgresql.org/)
+[![Vitest](https://img.shields.io/badge/Vitest-2.1-yellow.svg)](https://vitest.dev/)
 
-## Repo state
+Newtonite Ops is an internal operations management platform designed for speed, clarity, and concurrency safety. Inspired by Linear and modern enterprise admin consoles, it features a responsive single-page application frontend paired with a strictly typed REST backend backed by PostgreSQL.
 
-Empty repo at start (`master`, no commits). This milestone adds:
+---
 
-- `backend/` — Node + Express + TypeScript + Prisma (PostgreSQL) + Vitest
-  - `GET /api/health` + JSON 404 + central error serializer (`backend/src/app.ts`)
-  - Prisma model: `User`, `Team`, `Membership(role)`, `WorkItem(version)`,
-    `Comment`, `ActivityEvent` (`backend/prisma/schema.prisma`)
-  - Tests: `backend/tests/health.test.ts` (supertest)
-- `frontend/` — React + TypeScript + Vite + Vitest
-  - `App.tsx` fetches `/api/health` (dev proxied to backend), shows reachable/unreachable states
-  - Tests: `frontend/src/App.test.tsx`
-- `docker-compose.yml` — local PostgreSQL 16
-- Root `package.json` workspaces + `test` / `typecheck` / `build` scripts
+## Table of Contents
 
-Deliberately **not** in M0: auth/login, work-item CRUD, 409 concurrency enforcement,
-workflow transitions, comments/activity writes, search/filter/pagination.
-Schema already contains `version`, roles, and history tables so M1 needs no rework.
+- [Key Capabilities](#key-capabilities)
+- [Architecture & Tech Stack](#architecture--tech-stack)
+- [Quick Start Guide](#quick-start-guide)
+- [Demo Credentials](#demo-credentials)
+- [Core User Workflows](#core-user-workflows)
+- [Role-Based Access Control (RBAC)](#role-based-access-control-rbac)
+- [Workflow State Machine](#workflow-state-machine)
+- [API Reference](#api-reference)
+- [Testing & Quality Gates](#testing--quality-gates)
+- [Repository Structure](#repository-structure)
+- [Engineering Decisions & Trade-offs](#engineering-decisions--trade-offs)
 
-## Prerequisites
+---
 
-- Node.js >= 20, npm >= 10
-- Docker (for PostgreSQL)
+## Key Capabilities
 
-## Run (local)
+- **Linear-Inspired Enterprise Aesthetic**: Light canvas (`#f8fafc`), crisp white cards, subtle neutral borders, restrained elevation, and accessible WCAG AA color palettes for statuses and priorities.
+- **Responsive Adaptive Layout**:
+  - **Desktop**: Persistent collapsible sidebar (240px to 68px compact mode) and full 7-column data table.
+  - **Tablet**: Compact layout with prioritized table columns to eliminate horizontal scrolling.
+  - **Mobile**: Off-canvas sliding navigation drawer, stacked metric cards, card-styled work items, and full-width detail forms.
+- **Optimistic Concurrency & 409 Conflict Reconciliation**: Every editable work-item mutation requires `expectedVersion`. If an item changes concurrently on the server:
+  - The client receives `409 Conflict`.
+  - The user's in-progress form draft is **strictly preserved** (never lost or silently overwritten).
+  - A conflict reconciliation banner highlights rejected changes against the latest server version, offering explicit *"Reload latest (keeps my draft)"* and *"Discard my changes"* options.
+- **Authoritative Server Authorization**: Display-only permission mirrors guide user experience, but all access checks and transition gates are enforced authoritatively in backend services.
+- **Server-Backed Metrics & Deterministic Pagination**: Operational statistics are queried directly from database aggregations (never computed from page subsets). Pagination is server-driven with bounded sizes and stable sorting (`updatedAt DESC, id DESC`).
+- **Transactional Audit Trail & Discussion**: Every work item mutation atomically records immutable `ActivityEvent` records with before/after diffs. Team members can post comments without altering work item versions.
 
-```powershell
-# 1. env
-Copy-Item .env.example .env
+---
 
-# 2. database
+## Architecture & Tech Stack
+
+```mermaid
+graph TD
+    Client["React 18 + Vite SPA<br/>(TypeScript, Custom Design Tokens)"]
+    Proxy["Vite Dev Server Proxy<br/>(:5173 /api -> :3001)"]
+    API["Express.js REST API<br/>(:3001, Central Error Envelope)"]
+    Service["WorkItem & Team Services<br/>(RBAC, State Machine, Concurrency)"]
+    Prisma["Prisma ORM Client<br/>(Schema & Migrations)"]
+    DB[(PostgreSQL 16 DB<br/>Transactions & Indexes)]
+
+    Client -->|HTTP / JSON + Bearer JWT| Proxy
+    Proxy --> API
+    API --> Service
+    Service --> Prisma
+    Prisma --> DB
+```
+
+- **Frontend**: React 18, TypeScript, Vite, Vitest, Testing Library. Zero unnecessary third-party UI dependencies; crafted with semantic HTML, accessible CSS custom properties, and native SVG icons.
+- **Backend**: Node.js, Express, TypeScript, Zod schema validation, bcryptjs, jsonwebtoken, Vitest, Supertest.
+- **Data Layer**: PostgreSQL 16 (via Docker Compose) with Prisma ORM migrations and optimized compound indexes (`[teamId, status]`, `[teamId, updatedAt]`, `[workItemId, createdAt]`).
+
+---
+
+## Quick Start Guide
+
+### Prerequisites
+- **Node.js**: `>= 20.0.0`
+- **npm**: `>= 10.0.0`
+- **Docker**: Docker Desktop or Docker Engine (for local PostgreSQL)
+
+### 1. Clone & Configure Environment
+
+```bash
+git clone https://github.com/Palakagarwal28/Newtonite_SE_.git
+cd Newtonite_SE_
+
+# Copy example environment variables
+cp .env.example .env
+```
+
+*(On Windows PowerShell, use `Copy-Item .env.example .env`)*.
+
+### 2. Start PostgreSQL Database
+
+```bash
 docker compose up -d postgres
+```
 
-# 3. install (from repo root)
+### 3. Install Dependencies & Migrate Database
+
+```bash
+# Install all monorepo workspace dependencies
 npm install
 
-# 4. prisma client + migrate
+# Generate Prisma client and apply database migrations
 npm run prisma:generate
 npm run prisma:migrate
 
-# 5. dev (two terminals)
-npm run dev:backend   # :3001
-npm run dev:frontend  # :5173, proxies /api -> :3001
+# Seed development accounts and initial teams (idempotent)
+npm run seed -w backend
 ```
 
-## Verify
+### 4. Run Development Servers
 
-```powershell
-npm run typecheck
-npm test
+Open two terminal windows from the repository root:
+
+```bash
+# Terminal 1: Backend API server (runs at http://localhost:3001)
+npm run dev:backend
+
+# Terminal 2: Frontend Vite application (runs at http://localhost:5173)
+npm run dev:frontend
 ```
 
-Expected: backend 2 tests pass, frontend 3 tests pass, `tsc --noEmit` clean both workspaces.
-Prisma `validate`/`generate` requires no live DB connection.
-
-## Known limitations (M0)
-
-- No authentication/authorization yet — health endpoint is public by design.
-- No work-item API yet; Prisma schema is unapplied until `prisma:migrate` runs.
-- Frontend has no routing/state management; single health view only.
-- No async workers, notifications, or idempotency keys yet (planned M3+).
+Navigate your browser to **http://localhost:5173**.
 
 ---
 
-## M1.1 — Authentication + team authorization (implemented)
+## Demo Credentials
 
-### Endpoints
+The backend seed script (`backend/prisma/seed.ts`) automatically creates the following accounts for local development and testing:
 
-| Method | Path | Auth | Rule |
+| Email | Password | Role / Scope | Key Permissions |
 |---|---|---|---|
-| POST | `/api/auth/register` | no | Creates a regular user only. Unknown keys (incl. `isGlobalAdmin`) are rejected with 400; `isGlobalAdmin` is always `false`. Duplicate email → 409 `EMAIL_TAKEN`. |
-| POST | `/api/auth/login` | no | `{ email, password }` → `{ token, expiresIn, user }`. Unknown email, missing hash, or wrong password all return 401 `INVALID_CREDENTIALS` (no account enumeration). |
-| GET | `/api/auth/me` | Bearer | Returns the token owner's identity + memberships. No user-id parameter exists to spoof. |
-| GET | `/api/teams` | Bearer | Own teams (with role). Global admins see all teams (`role: null` = access via global grant). |
-| POST | `/api/teams` | Bearer | Global admin only → 201 (creator joins as team ADMIN). Others → 403 `ROLE_REQUIRED`. Duplicate name → 409 `TEAM_NAME_TAKEN`. |
-| GET | `/api/teams/:teamId` | Bearer | Member of the team or global admin. Non-member → 403 `TEAM_ACCESS_DENIED` (no data leaked). Missing team → 404 `TEAM_NOT_FOUND`. |
-| GET | `/api/teams/:teamId/members` | Bearer | Same rule as above. |
-| POST | `/api/teams/:teamId/members` | Bearer | Team ADMIN or global admin. `{ userId | email, role }`. Unknown user → 404, duplicate → 409 `MEMBERSHIP_EXISTS`. |
-| DELETE | `/api/teams/:teamId/members/:userId` | Bearer | Team ADMIN or global admin. Refuses to remove the last ADMIN → 409 `CANNOT_REMOVE_LAST_ADMIN`. |
+| `admin@example.com` | `Admin123!` | **Global Admin** | Create teams, access any team, manage members, edit/transition all work items |
+| `manager.alpha@example.com` | `Manager123!` | **MANAGER** (Ops Central) | Transition work item statuses, assign team members, create/edit items |
+| `member.alpha@example.com` | `Member123!` | **MEMBER** (Ops Central) | Create work items, edit title/description/priority, post comments |
+| `outsider@example.com` | `Outsider123!` | **No Team** | Authenticated user without team assignments (demonstrates empty/access-denied states) |
 
-All errors use `{ error: { code, message, details? } }`. Validation failures → 400
-`VALIDATION_ERROR`; missing/malformed header → 401 `UNAUTHENTICATED`; bad/expired
-token → 401 `INVALID_TOKEN`.
+> **Tip**: The login screen includes **one-click fill chips** for these accounts for instant testing without manual typing.
 
-### Permission matrix
+---
 
-Implemented in `backend/src/auth/permissions.ts` and locked by unit tests:
+## Core User Workflows
 
-| Action | global admin | team ADMIN | MANAGER | MEMBER | outsider |
-|---|---|---|---|---|---|
-| `teams:create` | ✅ | ❌ | ❌ | ❌ | ❌ |
-| `teams:view` / `listMembers` | ✅ | ✅ | ✅ | ✅ | ❌ |
-| `teams:addMember` / `removeMember` | ✅ | ✅ | ❌ | ❌ | ❌ |
+### 1. Operations Dashboard
+- **Live Metrics**: Overview cards displaying real-time server counts for `Total`, `Assigned to me`, `Urgent`, and individual statuses (`OPEN`, `IN_PROGRESS`, `BLOCKED`, `IN_REVIEW`, `DONE`, `CLOSED`).
+- **Interactive Metric Filtering**: Clicking any metric card (e.g. "Urgent" or "Blocked") immediately filters the work-item list.
+- **Search & Filters**: Debounced free-text search (queries both title and description server-side), team selection, priority selection, assignee filtering, and a one-click "Clear filters" action.
 
-Global admin (`User.isGlobalAdmin`) and team ADMIN (`Membership.role`) are distinct:
-a team ADMIN administers membership within one team only and cannot create teams
-or read other teams. (MANAGER gains work-item powers in M1.2+; here it is read-only.)
+### 2. Creating Work Items
+- Click **"New work item"** in the top bar or dashboard toolbar.
+- Specify team, title, description, priority, and optional assignee (enforces assignee is a team member).
+- Newly created items are born in `OPEN` status.
 
-### Demo bootstrap
+### 3. Reviewing & Editing Work Items
+- Click any work item row or card to open the detail view.
+- Members can update `Title`, `Description`, and `Priority`.
+- Managers and Admins can update `Status` (restricted to legal transitions) and reassign team members.
+- Saves submit `expectedVersion` to prevent accidental overwrites.
 
-```powershell
-Copy-Item .env.example .env   # then set a real JWT_SECRET
-docker compose up -d postgres
-npm install
-npm run prisma:migrate
-npm run seed -w backend       # idempotent; refuses production unless ALLOW_SEED_PRODUCTION=true
+### 4. Concurrency Conflict (409) Handling
+- If two users edit the same work item concurrently, the second save is rejected with `409 Conflict`.
+- The user's unsaved edits remain intact in the input fields.
+- The UI displays the server version conflict alongside the attempted changes.
+- The user can choose to **"Reload latest (keeps my draft)"** to review the latest changes, or **"Discard my changes"** to revert.
+
+### 5. Discussion & Activity Audit
+- **Comments**: Any team member can add comments with duplicate-click prevention. Comments append to the timeline and do not bump the work-item version.
+- **Activity Timeline**: Chronological audit trail showing actor, timestamp, version number, and exact field modifications (`status: "OPEN" → "IN_PROGRESS"`).
+
+---
+
+## Role-Based Access Control (RBAC)
+
+Newtonite Ops distinguishes between platform-level **Global Admin** (`User.isGlobalAdmin`) and team-scoped roles (`Membership.role`):
+
+| Capability | Global Admin | Team ADMIN | Team MANAGER | Team MEMBER | Non-Member |
+|---|:---:|:---:|:---:|:---:|:---:|
+| Create New Teams (`POST /api/teams`) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| View Team Details & Members | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Add / Remove Team Members | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Create Work Items | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Edit Title, Description, Priority | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Post Discussion Comments | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Change Work Item Status | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Assign / Reassign Work Items | ✅ | ✅ | ✅ | ❌ | ❌ |
+
+---
+
+## Workflow State Machine
+
+Work items follow a defined lifecycle state machine enforced in `backend/src/work-items/transitions.ts`:
+
+```mermaid
+stateDiagram-v2
+    [*] --> OPEN
+    OPEN --> IN_PROGRESS
+    OPEN --> CLOSED
+    IN_PROGRESS --> BLOCKED
+    IN_PROGRESS --> IN_REVIEW
+    BLOCKED --> IN_PROGRESS
+    BLOCKED --> CLOSED
+    IN_REVIEW --> IN_PROGRESS
+    IN_REVIEW --> BLOCKED
+    IN_REVIEW --> DONE
+    DONE --> CLOSED
+    DONE --> IN_PROGRESS: Reopen
+    CLOSED --> IN_PROGRESS: Reopen
 ```
 
-Dev-only accounts (see `.env.example`, overridable via `SEED_*`): `admin@example.com`
-(global admin), `manager.alpha@example.com` (MANAGER of Ops Central),
-`member.alpha@example.com` (MEMBER), `outsider@example.com` (no team).
+- Same-status updates are treated as safe no-ops (allowed without version increment).
+- Illegal transitions are rejected by the API with HTTP `422 INVALID_STATUS_TRANSITION`.
+- `DONE` (completed/verified) and `CLOSED` (terminated/wont-do) are kept distinct.
 
-### Verify (M1.1)
+---
 
-```powershell
-$env:DATABASE_URL = 'postgresql://postgres:postgres@localhost:5432/newtonite?schema=public'
-$env:JWT_SECRET = 'a-long-test-secret-at-least-32-chars!!'
-npm run typecheck -w backend
+## API Reference
+
+All protected endpoints require an `Authorization: Bearer <token>` header. Responses follow a standardized JSON envelope (`{ error: { code, message, details? } }` on failure).
+
+### Authentication & Identity
+| Method | Path | Access | Description |
+|---|---|---|---|
+| `POST` | `/api/auth/register` | Public | Register standard account (always `isGlobalAdmin: false`) |
+| `POST` | `/api/auth/login` | Public | Authenticate with `{ email, password }` → `{ token, user }` |
+| `GET` | `/api/auth/me` | Bearer | Retrieve caller identity and team memberships |
+
+### Teams & Members
+| Method | Path | Access | Description |
+|---|---|---|---|
+| `GET` | `/api/teams` | Bearer | List accessible teams (all for Global Admin) |
+| `POST` | `/api/teams` | Global Admin | Create new team (creator joins as team `ADMIN`) |
+| `GET` | `/api/teams/:id` | Member/Admin | Get team details |
+| `GET` | `/api/teams/:id/members` | Member/Admin | List team members and their roles |
+| `POST` | `/api/teams/:id/members` | Team/Global Admin | Add user to team with specified role |
+| `DELETE` | `/api/teams/:id/members/:userId` | Team/Global Admin | Remove user from team (last admin protected) |
+
+### Work Items
+| Method | Path | Access | Description |
+|---|---|---|---|
+| `GET` | `/api/work-items` | Bearer | Search/filter work items with deterministic pagination |
+| `POST` | `/api/work-items` | Member/Admin | Create new work item in `OPEN` status |
+| `GET` | `/api/work-items/:id` | Member/Admin | Retrieve work item with recent comments and counts |
+| `PATCH` | `/api/work-items/:id` | Member/Admin | Mutate fields (requires `expectedVersion`) |
+| `POST` | `/api/work-items/:id/comments` | Member/Admin | Post comment (atomic audit, no version increment) |
+| `GET` | `/api/work-items/:id/activity` | Member/Admin | Paginated activity timeline (newest-first) |
+
+---
+
+## Testing & Quality Gates
+
+The monorepo includes unit tests, component tests, and API contract suites:
+
+```bash
+# 1. Typecheck both workspaces
+npm run typecheck
+
+# 2. Run frontend component & contract tests (26 tests, 5 suites)
+npm run test -w frontend
+
+# 3. Verify production bundle compilation
+npm run build -w frontend
+
+# 4. Run backend unit tests
 npm run test -w backend
-npx prisma validate --schema prisma/schema.prisma  # from backend/
 ```
-
-Expected: typecheck clean; 4 test files / 22 tests pass
-(health 2, permissions 4, auth 9, teams 7); schema valid.
-
-### Known limitations (M1.1)
-
-- No refresh tokens / revocation list — delete the user to invalidate; token lifetime (default 12h) bounds exposure.
-- No rate limiting on login yet (needed before internet exposure).
-- Team existence is distinguishable (403 vs 404) — accepted for an internal tool; see ENGINEERING_DECISIONS.
-- No work-item CRUD and no React login UI yet (explicitly out of scope for M1.1).
 
 ---
 
-## M1.2 — Work-item lifecycle (implemented)
+## Repository Structure
 
-### Endpoints (all require Bearer auth; team membership enforced per resource)
-
-| Method | Path | Rule |
-|---|---|---|
-| POST | `/api/work-items` | Any team member (any role) or global admin. Body: `{ teamId, title, description, priority?, assigneeId? }`. Items are born `OPEN` (no status field). `assigneeId` must be a member of the team → else 422 `ASSIGNEE_NOT_TEAM_MEMBER`. No `createdById` field exists — creator is the token owner. |
-| GET | `/api/work-items` | Scoped: `teamId` filter (access-checked) or caller's teams (global admin: all). Filters: `status`, `priority`, `assigneeId`, `mine=true`, `q` (title+description, DB-side `contains`). Pagination: `page` ≥ 1, `pageSize` 1–100 (default 20). Deterministic order `updatedAt desc, id desc`. → `{ items, page, pageSize, total, totalPages }`. |
-| GET | `/api/work-items/:id` | Member of the item's team or global admin (cross-team guess → 403, unknown id → 404). Includes team/assignee/creator, latest 10 comments (oldest-first), `commentCount`, `activityCount`. |
-| PATCH | `/api/work-items/:id` | `{ expectedVersion, title?, description?, priority?, status?, assigneeId?/null }`. Title/desc/priority: any member. Status/assignment: MANAGER/ADMIN/global-admin only (→ 403 `ROLE_REQUIRED`). Illegal transition → 422 `INVALID_STATUS_TRANSITION` (with `allowed`). Stale version → 409 `VERSION_CONFLICT`, item + history untouched. Identical-values retry → 200 no-op, same version. |
-| POST | `/api/work-items/:id/comments` | Any member. `{ body }` (1–5000 chars). Creates comment + `COMMENTED` event atomically; does not bump item version. |
-| GET | `/api/work-items/:id/activity` | Paginated `{ events, page, pageSize, total, totalPages }`, newest-first. Events carry `actorId`, `action`, `detail` (before/after), `version`, timestamp. |
-
-Errors keep the M1.1 envelope. New codes: `WORK_ITEM_NOT_FOUND`,
-`ASSIGNEE_NOT_TEAM_MEMBER`, `INVALID_STATUS_TRANSITION`, `VERSION_CONFLICT`.
-
-### Workflow matrix (`backend/src/work-items/transitions.ts`, unit-locked)
-
-| From | Allowed next |
-|---|---|
-| OPEN | IN_PROGRESS, CLOSED |
-| IN_PROGRESS | BLOCKED, IN_REVIEW |
-| BLOCKED | IN_PROGRESS, CLOSED |
-| IN_REVIEW | IN_PROGRESS, DONE, BLOCKED |
-| DONE | CLOSED, IN_PROGRESS (reopen) |
-| CLOSED | IN_PROGRESS (reopen) |
-
-Same-status PATCH is a no-op (allowed). No approval workflow beyond IN_REVIEW→DONE
-was invented; no status values were added.
-
-### Work-item permission rules (additive — M1.1 team matrix untouched)
-
-| Action | global admin | ADMIN | MANAGER | MEMBER | outsider |
-|---|---|---|---|---|---|
-| create / view / edit fields / comment | ✅ | ✅ | ✅ | ✅ | ❌ |
-| change status or assignment | ✅ | ✅ | ✅ | ❌ | ❌ |
-
-### Verify (M1.2)
-
-```powershell
-$env:DATABASE_URL = 'postgresql://postgres:postgres@localhost:5432/newtonite?schema=public'
-$env:JWT_SECRET = 'a-long-test-secret-at-least-32-chars!!'
-npm run typecheck -w backend   # clean (src + tests + seed)
-npm run test -w backend        # 6 files / 35 pass (22 prior + 13 new, incl. real-Postgres concurrency)
-npm run build -w backend       # clean
-npx prisma validate --schema prisma/schema.prisma  # valid, DB in sync — no new migration
-npm run typecheck -w frontend; npm run test -w frontend  # unchanged green (3 pass)
 ```
-
-### Known limitations (M1.2, current)
-
-- No refresh tokens / revocation list; no login rate limiting (carried from M1.1).
-- Text search is `contains` (case-insensitive) without a trigram index — fine at current scale; add `pg_trgm` if search becomes hot.
-- List filters accept single `status`/`priority` values (no multi-select yet).
-- No React work-item UI yet; API only.
-- Team/item existence distinguishable via 403-vs-404 (accepted internal-tool trade-off).
+Newtonite-SE/
+├── backend/
+│   ├── prisma/
+│   │   ├── migrations/         # PostgreSQL database schema migrations
+│   │   ├── schema.prisma       # Prisma models: User, Team, WorkItem, etc.
+│   │   └── seed.ts             # Idempotent development seeding script
+│   ├── src/
+│   │   ├── auth/               # JWT token utilities, passwords, and RBAC matrix
+│   │   ├── routes/             # Express API routes (auth, teams, work-items, health)
+│   │   ├── work-items/         # State machine, service logic, and concurrency
+│   │   └── app.ts              # Express application and central error handler
+│   └── tests/                  # Backend unit & integration test suites
+├── frontend/
+│   ├── src/
+│   │   ├── components/         # Reusable UI: Badges, Icons, Sidebar, WorkItemCard
+│   │   ├── views/              # Screens: Dashboard, Detail, Login
+│   │   ├── api.ts              # Strictly typed backend API client and errors
+│   │   ├── auth.tsx            # Session authentication provider & hook
+│   │   ├── rules.ts            # Display-only permission and transition mirrors
+│   │   ├── index.css           # Linear-inspired enterprise design tokens
+│   │   └── App.tsx             # Responsive application shell & navigation
+│   └── tests/                  # Frontend test suites (mocking fetch contracts)
+├── docker-compose.yml          # PostgreSQL 16 container definition
+├── ENGINEERING_DECISIONS.md    # Architectural decision records (ADRs)
+├── package.json                # Monorepo workspaces definition
+└── README.md                   # Project documentation
+```
 
 ---
 
-## M1.3 — React frontend (implemented)
+## Engineering Decisions & Trade-offs
 
-### Startup (full stack)
+Detailed rationales for all design choices are documented in [`ENGINEERING_DECISIONS.md`](./ENGINEERING_DECISIONS.md). Key highlights:
 
-```powershell
-Copy-Item .env.example .env   # then set a real JWT_SECRET
-docker compose up -d postgres
-npm install
-npm run prisma:migrate
-npm run seed -w backend       # dev-only demo accounts (idempotent)
-npm run dev:backend           # :3001 (terminal 1)
-npm run dev:frontend          # :5173, proxies /api → :3001 (terminal 2)
-```
+- **Optimistic Concurrency via `updateMany`**: Concurrency is implemented with a single atomic conditional query (`where: { id, version: expectedVersion }`). Stale versions immediately return `409 VERSION_CONFLICT` without modifying data or generating orphan audit logs.
+- **Stateless Bearer JWTs**: Simplifies multi-instance deployment and dev proxying without session-store overhead. Tokens carry short 12-hour expiry, with database re-verification on sensitive calls.
+- **Pure JavaScript `bcryptjs`**: Selected over native bcrypt bindings to ensure zero binary compilation headaches across cross-platform developer environments (macOS, Linux, Windows).
+- **Separation of Authorization vs UI Mirrors**: Frontend components use client helpers (`rules.ts`) solely to optimize user interface feedback. The backend retains absolute authority over all permissions and state transitions.
 
-Open http://localhost:5173. Sign in with a seeded account, e.g.
-`admin@example.com` / `Admin123!` (overridable via `SEED_*` in `.env`).
+---
 
-### End-to-end demo flow
+## License
 
-1. **Login** — seeded credentials → `POST /api/auth/login`; token in
-   `localStorage` (`newtonite.token`); identity via `GET /api/auth/me`.
-2. **Dashboard** — status/total/mine/urgent metrics (server-side counts), team /
-   status / priority / assignee / mine / text filters, paginated table
-   (Key, Title, Status, Priority, Team, Assignee, Updated). Click a row to open it.
-3. **Create** — "New work item" (team, title, description, priority, assignee).
-4. **Detail** — edit title/description/priority; MANAGER+ also sees status
-   (only legal transitions, DONE and CLOSED kept distinct) and assignee pickers;
-   MEMBER sees a read-only note. Every save sends `expectedVersion`.
-5. **Conflict** — edit the same item in two tabs/sessions; the second save gets
-   409, keeps the draft, explains the situation, and offers "Reload latest".
-6. **Comments + activity** — post comments (version unchanged), browse the
-   newest-first timeline with "Load more".
-7. **Logout** — header button clears the token; expired tokens (401) log out
-   automatically with a "session expired" message on next login.
-
-### Verify (M1.3)
-
-```powershell
-npm run typecheck -w frontend  # clean
-npm run test -w frontend       # 5 files / 17 pass (API contracts, App shell, Dashboard, Detail, Login; fetch mocked)
-npm run build -w frontend      # clean production build
-npm run test -w backend        # 6 files / 35 pass — backend untouched, still green
-```
-
-Frontend tests mock `fetch` for component behavior; every URL/method/body is
-asserted against the real backend routes in `src/api.test.ts`, and backend
-correctness stays covered by the Postgres integration suite.
-
-### Known limitations (M1.3, current)
-
-- No signup page (registration stays API-only; admins come from seed).
-- Metrics are per-status count queries (8 lightweight `pageSize=1` requests per
-  filter change) rather than a dedicated aggregate endpoint.
-- No optimistic UI on save — the list/detail refresh from the server after writes.
-- No auto-refresh/polling; a second tab's changes surface on next load or via the
-  409 path. No offline support.
-- **No idempotency keys: duplicate POSTs create duplicates.** Buttons disable
-  while a request is pending (best-effort), but two rapid submissions — or a
-  retry after a timeout — create two work items/comments. Verified live:
-  two identical comment POSTs returned 201 + 201 with two stored comments.
-  A real fix needs client-generated idempotency keys + a server dedupe record.
-- Auth/baseline limitations from M1.1–M1.2 still apply.
+This project is proprietary and internal to Newtonite Operations. All rights reserved.
